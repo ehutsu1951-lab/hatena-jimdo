@@ -1,32 +1,22 @@
-# はてなブログ → Jimdo 自動記事リンク（無料）
+# 立体カード型：はてなブログ → Jimdo
 
-はてなブログ `https://stoputsunomiyalrt.hatenablog.com/` の公開HTMLから最新10件を抽出して、GitHub Pages に掲載します。Jimdo の RSS ウィジェットは使用しません。
+## 仕組み
+- 公開ブログの各ページから記事を取得し、`articles.json` に過去記事を蓄積します。初回に取得できる過去記事は公開ページで遡れる範囲です。
+- 新しい記事は GitHub Actions で約2時間ごとに確認します。GitHub Actions のスケジュールは遅延または停止する場合があります。
+- `index.html` を GitHub Pages の `main` と `/(root)` で公開します。
+- カード型のデザイン、検索、年月選択、さらに表示、記事リンクを備えています。
 
-## 1. GitHubの新規リポジトリ
-1. GitHubで新しい **Public** リポジトリ `hatena-jimdo` を作成。
-2. このZIPの中身（`.github/workflows/update.yml`、`update.py`、`requirements.txt`、`docs/index.html`）をリポジトリの同じ場所にアップロード。**`.github` は隠しフォルダです。**
-3. GitHub の **Settings → Actions → General → Workflow permissions** で **Read and write permissions** を選択（必要な場合のみ）。
-4. **Actions → Update Hatena articles → Run workflow** を押す。自動生成された `docs/index.html` が更新されます。
-5. **Settings → Pages → Build and deployment → Deploy from a branch → main /docs → Save**。しばらくして公開されます。
+## 更新手順
+1. GitHub リポジトリ直下の `update.py` と `requirements.txt` を、このZIPの内容に差し替えます。
+2. `.github/workflows/update.yml` を同じパスで登録します（重要：ルート直下の `update.yml` は無効）。GitHub 上で Add file > Create new file から `.github/workflows/update.yml` を指定して中身を貼り付けても構いません。
+3. Repository Settings > Actions > General > Workflow permissions を Read and write permissions に変更する必要がある場合があります。
+4. Actions > Update Hatena articles > Run workflow で初回実行。完了後、`index.html` と `articles.json` が生成されます。
+5. GitHub Pages は `main` / `/(root)` を維持します。既に Jimdo に iframe を貼っている場合、URLを変える必要はありません。
 
-## 2. Jimdo へ貼り付け
-Jimdo Creatorでページを編集 → 「コンテンツを追加」→「その他のコンテンツ＆アドオン」→「ウィジェット / HTML」 → 次を貼り付けます。`YOUR_GITHUB_USER` はご自分のGitHubユーザー名に変更します。
+Jimdo に貼るコード：
 
 ```html
-<iframe
-  src="https://YOUR_GITHUB_USER.github.io/hatena-jimdo/"
-  title="はてなブログの最新記事"
-  style="width:100%;height:1250px;border:0;background:#fff;"
-  loading="lazy">
-</iframe>
+<iframe src="https://ehutsu1951-lab.github.io/hatena-jimdo/" title="公共交通を考える会の記事一覧" style="width:100%;height:1250px;border:0" loading="lazy"></iframe>
 ```
 
-## 3. 自動更新
-GitHub Actions が約2時間ごとに公開ブログを確認します。GitHub側の混雑などにより遅れる場合があります。ページを直接更新するためJimdoを触る必要はありません。
-
-## 補足
-- はてなブログのサイト構造変更によりプログラム更新が必要になることがあります。
-- ブログに表示される記事が10件未満なら、その件数が表示されます。
-- 画像はブログ記事内にある場合のみ表示します。
-- Jimdoの無料ページに載せる外部iframeは表示条件によって高さが変わるため、HTMLの `height:1250px` を調整してください。
-- Publicリポジトリ／標準的なGitHub Pages・Actionsの無料枠内で利用する想定です。GitHubの無料枠や規約は変更される場合があります。
+はてなブログ側の構造変更、閲覧制限、記事の公開範囲によっては取得できないことがあります。

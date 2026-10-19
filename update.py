@@ -1,67 +1,75 @@
+import json, html, re, time
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 from datetime import datetime
-import html
 import requests
 from bs4 import BeautifulSoup
 
-BLOG = 'https://stoputsunomiyalrt.hatenablog.com/'
-OUT = Path(__file__).parent / 'docs' / 'index.html'
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; HatenaJimdoReader/1.0)'}
+BLOG='https://stoputsunomiyalrt.hatenablog.com/'
+BASE=Path(__file__).resolve().parent
+DB=BASE/'articles.json'
+PAGE=BASE/'index.html'
+HEAD={'User-Agent':'Mozilla/5.0 (compatible; HatenaJimdoArchive/2.0)'}
 
+def safeurl(src):
+    url=urljoin(BLOG,src or '')
+    return url if urlparse(url).scheme in ('http','https') else ''
 
-def clean_image(url):
-    if not url: return ''
-    if url.startswith('//'): url='https:' + url
-    url=urljoin(BLOG,url)
-    return url if urlparse(url).scheme in ('https','http') else ''
+def get_archive():
+    if DB.exists():
+        return {x['url']:x for x in json.loads(DB.read_text(encoding='utf-8'))}
+    return {}
 
-
-def fetch():
-    result = []
-    for page in [BLOG, BLOG + '?page=2']:
-        if len(result)>=10: break
-        response=requests.get(page,headers=HEADERS,timeout=25)
-        response.raise_for_status()
+def collect():
+    session=requests.Session(); session.headers.update(HEAD)
+    found={}; seen=set(); target=BLOG
+    for number in range(1,201):
+        if not target or target in seen: break
+        seen.add(target)
+        response=session.get(target,timeout=30); response.raise_for_status()
         soup=BeautifulSoup(response.text,'html.parser')
-        for entry in soup.select('article.entry, .hentry'):
-            title_node=entry.select_one('.entry-title a, .entry-title-link, h1.entry-title a')
-            if not title_node: continue
-            link=urljoin(BLOG,title_node.get('href',''))
-            if not link.startswith(BLOG+'entry/'): continue
-            if any(x['link']==link for x in result): continue
-            body=entry.select_one('.entry-content')
-            # Prefer an actual paragraph to image captions/metadata.
-            paragraphs=[p.get_text(' ',strip=True) for p in body.select('p')] if body else []
-            excerpt=next((p for p in paragraphs if len(p)>15), '')
-            if not excerpt and body: excerpt=body.get_text(' ',strip=True)
-            image_node=body.select_one('img') if body else None
-            image=clean_image(image_node.get('data-src') or image_node.get('src')) if image_node else ''
-            date_node=entry.select_one('time[datetime], .date a, .entry-date a, time')
-            date=(date_node.get('datetime') or date_node.get_text(' ',strip=True)) if date_node else ''
+        entries=soup.select('article.entry, article.hentry, .hentry')
+        for a in entries:
+            t=a.select_one('.entry-title a, a.entry-title-link, h1.entry-title a, h2.entry-title a')
+            if not t: continue
+            url=safeurl(t.get('href'))
+            if not url.startswith(BLOG+'entry/'):continue
+            content=a.select_one('.entry-content')
+            paras=[p.get_text(' ',strip=True) for p in content.select('p')] if content else []
+            excerpt=next((p for p in paras if len(p)>15),'')
+            if not excerpt and content: excerpt=content.get_text(' ',strip=True)
+            pic=content.select_one('img') if content else None
+            img=safeurl(pic.get('data-src') or pic.get('src')) if pic else ''
+            dt=a.select_one('time[datetime], .entry-date, .date')
+            date=(dt.get('datetime') or dt.get_text(' ',strip=True)) if dt else ''
             date=date[:10].replace('/','-')
-            result.append({'title':title_node.get_text(' ',strip=True),'link':link,'excerpt':excerpt[:135],'date':date,'image':image})
-            if len(result)>=10: break
-    if not result:
-        raise RuntimeError('記事が取得できませんでした。はてなブログのHTML構造を確認してください。')
-    return result
+            found[url]={'url':url,'title':t.get_text(' ',strip=True),'date':date,'excerpt':excerpt[:200],'image':img}
+        nextlink=soup.select_one('a.pager-next, a[rel="next"], .pager-next a, .pagination-next a')
+        nxt=safeurl(nextlink.get('href')) if nextlink else ''
+        if nxt and urlparse(nxt).netloc!=urlparse(BLOG).netloc:nxt=''
+        if not nxt and entries:
+            # Hatena's page links use a cursor rather than /page/2.
+            nextlink=next((e for e in soup.select('a[href]') if '次のページ' in e.get_text(' ',strip=True)),None)
+            nxt=safeurl(nextlink.get('href')) if nextlink else ''
+        target=nxt
+        if number%15==0: print('Scanned',number,'pages:',len(found),'articles')
+        if not entries:break
+        time.sleep(.1)
+    if not found:raise RuntimeError('記事を取得できませんでした。公開ページまたは記事HTMLを確認してください。')
+    return found
 
+def generate(items):
+    data=json.dumps(items,ensure_ascii=False).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
+    template='''<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>公共交通を考える会｜ブログ記事</title><style>
+:root{color-scheme:light;--green:#0a6651;--ink:#173229}*{box-sizing:border-box}html{scroll-behavior:smooth}body{font-family:system-ui,"Yu Gothic",Meiryo,sans-serif;margin:0;color:var(--ink);background:linear-gradient(145deg,#e5f3eb,#f5f8f4 50%,#e7effb)}main{max-width:1100px;margin:0 auto;padding:27px 18px 65px}.hero{padding:34px 32px;border-radius:25px;background:linear-gradient(120deg,#0d6858,#0c8174 65%,#3ab094);box-shadow:0 16px 35px #07543f36,inset 0 1px #ffffff70;color:white;position:relative;overflow:hidden}.hero:after{content:"";position:absolute;right:-85px;top:-120px;width:320px;height:320px;border-radius:50%;background:#fff2;pointer-events:none}h1{font-size:clamp(1.35rem,3vw,2.1rem);margin:5px 0 10px}.hero p{margin:0;line-height:1.75}.eyebrow{font-size:.81rem;letter-spacing:.12em;font-weight:700;opacity:.87}.controls{display:flex;gap:12px;flex-wrap:wrap;margin:25px 0 8px}.controls input,.controls select{font:inherit;border:1px solid #d6e8dc;border-radius:15px;background:white;box-shadow:0 5px 14px #1e644112;padding:14px 16px;min-width:185px;outline-offset:3px}.controls input{flex:1}.summary{color:#506d60;font-size:.92rem;margin:8px 0 20px}.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.article-card{background:white;border-radius:20px;border:1px solid #ffffffb8;overflow:hidden;box-shadow:0 9px 17px #123c2923,0 2px 5px #123c2912;transition:transform .22s,box-shadow .22s;display:flex;flex-direction:column}.article-card:hover{transform:translateY(-5px);box-shadow:0 22px 30px #123c2932,0 3px 9px #123c2910}.thumb{width:100%;height:160px;object-fit:cover;background:linear-gradient(130deg,#197966,#85c9a6)}.thumb-placeholder{width:100%;height:130px;background:linear-gradient(120deg,#bfdccd,#e4f2eb);display:flex;align-items:center;justify-content:center;color:#16725f;font-size:1.06rem;font-weight:700}.card-body{padding:20px;display:flex;flex-direction:column;flex:1}.date{font-size:.76rem;color:#597266;font-weight:650}.article-card h2{font-size:1.12rem;line-height:1.65;margin:8px 0}.article-card h2 a{color:#143b2e;text-decoration:none}.article-card h2 a:hover{text-decoration:underline}.excerpt{font-size:.86rem;line-height:1.85;color:#586a5f;margin:0 0 20px;flex:1;overflow-wrap:anywhere}.go{display:inline-block;align-self:flex-start;background:linear-gradient(115deg,#08644b,#159078);color:white;text-decoration:none;border-radius:999px;padding:10px 17px;font-size:.87rem;font-weight:700;box-shadow:0 5px 10px #04583c25}.more{text-align:center;margin:24px}.more button{font:inherit;padding:13px 25px;border-radius:999px;background:white;border:1px solid #99bdaa;color:#0b674d;box-shadow:0 7px 18px #123c2920;cursor:pointer}.foot{text-align:center;margin:22px}.foot a{color:#0a6c54}.empty{text-align:center;padding:36px}.more[hidden]{display:none!important}@media(max-width:620px){main{padding:12px 10px 50px}.hero{padding:25px 20px;border-radius:19px}.cards{grid-template-columns:1fr;gap:16px}.thumb{height:170px}.controls input,.controls select{width:100%}}
+</style></head><body><main><section class="hero"><div class="eyebrow">UTSUNOMIYA PUBLIC TRANSPORT</div><h1>宇都宮市の公共交通を考える会</h1><p>はてなブログの最新記事から過去記事まで。検索・年月別にご覧いただけます。</p></section><div class="controls"><input id="search" type="search" placeholder="記事タイトル・内容から検索" aria-label="記事を検索"><select id="month" aria-label="年月を選ぶ"><option value="">すべての年月</option></select></div><p class="summary" id="count" role="status"></p><div class="cards" id="results"></div><div class="more"><button id="more" type="button">過去の記事をさらに見る ↓</button></div><p class="foot"><a href="https://stoputsunomiyalrt.hatenablog.com/" target="_blank" rel="noopener noreferrer">はてなブログのサイトを開く ↗</a></p></main><script id="all-articles" type="application/json">__DATA__</script><script>
+const all=JSON.parse(document.getElementById('all-articles').textContent),input=document.getElementById('search'),month=document.getElementById('month'),list=document.getElementById('results'),count=document.getElementById('count'),more=document.getElementById('more');let shown=12;for(const m of [...new Set(all.map(x=>(x.date||'').slice(0,7)).filter(Boolean))].sort().reverse()){const option=document.createElement('option');option.value=m;option.textContent=m.replace('-','年')+'月';month.append(option)}function render(){const q=input.value.trim().toLowerCase(),filtered=all.filter(x=>(!month.value||(x.date||'').startsWith(month.value))&&(!q||((x.title||'')+' '+(x.excerpt||'')).toLowerCase().includes(q)));count.textContent='表示可能な記事：'+filtered.length+'件';list.replaceChildren();if(!filtered.length){const p=document.createElement('p');p.className='empty';p.textContent='該当する記事がありません。';list.append(p)}for(const a of filtered.slice(0,shown)){const article=document.createElement('article');article.className='article-card';if(a.image){const img=document.createElement('img');img.className='thumb';img.src=a.image;img.loading='lazy';img.alt='';article.append(img)}else{const box=document.createElement('div');box.className='thumb-placeholder';box.textContent='公共交通を考える';article.append(box)}const body=document.createElement('div');body.className='card-body';const date=document.createElement('span');date.className='date';date.textContent=a.date||'日付未取得';const heading=document.createElement('h2');const titleLink=document.createElement('a');titleLink.href=a.url;titleLink.target='_blank';titleLink.rel='noopener noreferrer';titleLink.textContent=a.title;heading.append(titleLink);const excerpt=document.createElement('p');excerpt.className='excerpt';excerpt.textContent=a.excerpt||'';const link=document.createElement('a');link.className='go';link.href=a.url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='この記事を読む →';body.append(date,heading,excerpt,link);article.append(body);list.append(article)}more.hidden=filtered.length<=shown}input.addEventListener('input',()=>{shown=12;render()});month.addEventListener('change',()=>{shown=12;render()});more.addEventListener('click',()=>{shown+=12;render()});render();
+</script></body></html>'''
+    PAGE.write_text(template.replace('__DATA__',data),encoding='utf-8')
 
-def build(articles):
-    blocks=[]
-    for a in articles:
-        title=html.escape(a['title']); date=html.escape(a['date']); excerpt=html.escape(a['excerpt'])
-        url=html.escape(a['link'],quote=True)
-        img=f'<img src="{html.escape(a["image"],quote=True)}" alt="" loading="lazy">' if a['image'] else ''
-        blocks.append(f'''<article class="item">{img}<div class="content"><div class="date">{date}</div><h2>{title}</h2><p>{excerpt}</p><a href="{url}" target="_blank" rel="noopener noreferrer">記事を読む →</a></div></article>''')
-    updated=datetime.now().strftime('%Y-%m-%d')
-    page='''<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>最新記事｜宇都宮市の公共交通を考える会</title><style>
-:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#fff;color:#25302b;font:16px/1.65 -apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif}.wrap{max-width:900px;margin:0 auto;padding:12px}header{border-left:6px solid #19754b;padding-left:15px;margin:8px 0 18px}header h1{font-size:23px;margin:0}.item{display:flex;gap:18px;border-bottom:1px solid #dbe6de;padding:20px 0;align-items:flex-start}.item img{width:180px;height:115px;object-fit:cover;border-radius:7px;flex:none}.content{min-width:0;flex:1}.date{color:#68776f;font-size:13px}.item h2{font-size:19px;line-height:1.5;margin:2px 0 7px}.item p{font-size:14px;margin:0 0 7px;color:#44544b}.item a,.all a{color:#096e49;font-weight:700;text-decoration:none}.item a:hover,.all a:hover{text-decoration:underline}.all{text-align:center;padding:25px 0}.all a{border:1px solid #0f704a;border-radius:6px;padding:10px 20px;display:inline-block}@media(max-width:520px){.item{gap:12px}.item img{width:100px;height:80px}.item h2{font-size:16px}.item p{font-size:13px}}
-</style></head><body><main class="wrap"><header><h1>最新ブログ記事</h1></header>'''
-    page+=''.join(blocks)
-    page+=f'<div class="all"><a href="{BLOG}" target="_blank" rel="noopener noreferrer">はてなブログの記事をすべて見る →</a></div></main></body></html>'
-    OUT.parent.mkdir(parents=True,exist_ok=True)
-    OUT.write_text(page,encoding='utf-8')
-    print(f'Updated {len(articles)} articles to {OUT} ({updated})')
-
-if __name__ == '__main__': build(fetch())
+if __name__=='__main__':
+    previous=get_archive(); current=collect(); previous.update(current)
+    arr=sorted(previous.values(),key=lambda x:(x['date'],x['url']),reverse=True)
+    DB.write_text(json.dumps(arr,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    generate(arr)
+    print('Saved',len(arr),'articles')

@@ -21,7 +21,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html
+          git add -A
           if ! git diff --cached --quiet; then
             git commit -m 'Update blog articles'
             git push
